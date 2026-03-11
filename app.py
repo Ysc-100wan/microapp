@@ -5,7 +5,7 @@ import os
 import chardet
 
 # --- 1. 页面配置 ---
-st.set_page_config(page_title="宏观多轴分析模型", layout="wide")
+st.set_page_config(page_title="高级宏观多轴模型", layout="wide")
 
 # --- 2. 编码识别 ---
 def smart_read_csv(file_path):
@@ -73,7 +73,7 @@ uploaded_file = st.sidebar.file_uploader("更新文件", type=['csv', 'xlsx'])
 df = load_and_process_data(uploaded_file, window_choice)
 
 if df is None:
-    st.warning("等待数据上传...")
+    st.warning("等待数据加载...")
     st.stop()
 
 selected_regime = st.sidebar.selectbox("目标象限", ["美元涨 & 黄金涨", "美元涨 & 黄金跌", "美元跌 & 黄金涨", "美元跌 & 黄金跌"])
@@ -91,9 +91,9 @@ slice_options = slice_summary.apply(lambda x: f"{x['Start'].date()} 至 {x['End'
 selected_slice_str = st.sidebar.selectbox("历史切片", slice_options)
 slice_data = df[df['Regime_Grp'] == slice_summary.iloc[slice_options.index(selected_slice_str)]['ID']].copy()
 
-# --- 4. 多轴绘图修复版 ---
+# --- 4. 绘图 (稳健修复版) ---
 st.sidebar.subheader("📈 指标配置")
-indicators = st.sidebar.multiselect("展示指标 (1-4个独立轴)", 
+indicators = st.sidebar.multiselect("展示指标 (最多4个)", 
                                     ['USD', 'Gold', 'SP500', 'UST_10Y', 'Oil', 'Copper'], 
                                     default=['USD', 'Gold'])
 
@@ -101,36 +101,36 @@ if indicators:
     fig = go.Figure()
     colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA']
     
-    # 动态构建布局参数
-    layout_args = {
-        "xaxis": dict(domain=[0.15, 0.85], title="日期"),
-        "hovermode": "x unified",
-        "height": 700,
-        "template": "plotly_white"
-    }
+    # 基础布局
+    fig.update_layout(
+        xaxis=dict(domain=[0.15, 0.85], title="日期"),
+        hovermode="x unified",
+        height=700,
+        template="plotly_white",
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
 
     for i, ind in enumerate(indicators[:4]):
-        axis_name = f"yaxis{i+1}" if i > 0 else "yaxis"
-        
-        # 添加数据曲线
+        # 添加数据
         fig.add_trace(go.Scatter(
             x=slice_data['Date'], y=slice_data[ind],
-            name=ind, yaxis=f"y{i+1}" if i > 0 else "y",
+            name=ind, 
+            yaxis=f"y{i+1}" if i > 0 else "y",
             line=dict(color=colors[i], width=2)
         ))
         
-        # 配置对应的坐标轴
-        if i == 0: # 主左轴
-            layout_args["yaxis"] = dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]))
-        elif i == 1: # 主右轴
-            layout_args["yaxis2"] = dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]), 
-                                         anchor="x", overlaying="y", side="right")
-        elif i == 2: # 次左轴
-            layout_args["yaxis3"] = dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]),
-                                         anchor="free", overlaying="y", side="left", position=0.05)
-        elif i == 3: # 次右轴
-            layout_args["yaxis4"] = dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]),
-                                         anchor="free", overlaying="y", side="right", position=0.95)
+        # 逐个配置坐标轴，避开字典解包错误
+        if i == 0:
+            fig.update_layout(yaxis=dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i])))
+        elif i == 1:
+            fig.update_layout(yaxis2=dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]), 
+                                         anchor="x", overlaying="y", side="right"))
+        elif i == 2:
+            fig.update_layout(yaxis3=dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]),
+                                         anchor="free", overlaying="y", side="left", position=0.05))
+        elif i == 3:
+            fig.update_layout(yaxis4=dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]),
+                                         anchor="free", overlaying="y", side="right", position=0.95))
 
-    fig.update_layout(**layout_args)
     st.plotly_chart(fig, use_container_width=True)
