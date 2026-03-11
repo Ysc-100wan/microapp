@@ -91,9 +91,9 @@ slice_options = slice_summary.apply(lambda x: f"{x['Start'].date()} 至 {x['End'
 selected_slice_str = st.sidebar.selectbox("历史切片", slice_options)
 slice_data = df[df['Regime_Grp'] == slice_summary.iloc[slice_options.index(selected_slice_str)]['ID']].copy()
 
-# --- 4. 绘图 (稳健修复版) ---
+# --- 4. 绘图 (兼容新版 Plotly) ---
 st.sidebar.subheader("📈 指标配置")
-indicators = st.sidebar.multiselect("展示指标 (最多4个)", 
+indicators = st.sidebar.multiselect("展示指标 (1-4个)", 
                                     ['USD', 'Gold', 'SP500', 'UST_10Y', 'Oil', 'Copper'], 
                                     default=['USD', 'Gold'])
 
@@ -101,9 +101,9 @@ if indicators:
     fig = go.Figure()
     colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA']
     
-    # 基础布局
+    # 基础布局：使用新的 API 规范
     fig.update_layout(
-        xaxis=dict(domain=[0.15, 0.85], title="日期"),
+        xaxis=dict(domain=[0.15, 0.85], title=dict(text="日期")),
         hovermode="x unified",
         height=700,
         template="plotly_white",
@@ -120,17 +120,23 @@ if indicators:
             line=dict(color=colors[i], width=2)
         ))
         
-        # 逐个配置坐标轴，避开字典解包错误
+        # 兼容性设置：将 titlefont 改为 title_font，或者嵌套在 title 中
+        axis_config = dict(
+            title=dict(text=ind, font=dict(color=colors[i])),
+            tickfont=dict(color=colors[i]),
+            anchor="x" if i <= 1 else "free",
+            overlaying="y" if i > 0 else None,
+            side="left" if i % 2 == 0 else "right",
+            position=0.05 if i == 2 else (0.95 if i == 3 else None)
+        )
+        
         if i == 0:
-            fig.update_layout(yaxis=dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i])))
+            fig.update_layout(yaxis=axis_config)
         elif i == 1:
-            fig.update_layout(yaxis2=dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]), 
-                                         anchor="x", overlaying="y", side="right"))
+            fig.update_layout(yaxis2=axis_config)
         elif i == 2:
-            fig.update_layout(yaxis3=dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]),
-                                         anchor="free", overlaying="y", side="left", position=0.05))
+            fig.update_layout(yaxis3=axis_config)
         elif i == 3:
-            fig.update_layout(yaxis4=dict(title=ind, titlefont=dict(color=colors[i]), tickfont=dict(color=colors[i]),
-                                         anchor="free", overlaying="y", side="right", position=0.95))
+            fig.update_layout(yaxis4=axis_config)
 
     st.plotly_chart(fig, use_container_width=True)
