@@ -1,35 +1,34 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+import os
 
 # --- 1. 页面配置 ---
 st.set_page_config(
     page_title="宏观资产象限分析模型",
     page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# 自定义样式：优化夜间（凌晨1点）阅读体验
-st.markdown("""
-    <style>
-    .main { background-color: #f5f7f9; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 2. 数据加载函数 ---
+# --- 2. 数据加载函数 (优化版) ---
 @st.cache_data
-def process_data(file):
+def load_and_process_data(uploaded_file=None):
+    # 设定默认文件名 (建议您在GitHub中将Excel/CSV改名为此名称)
+    default_filename = 'macro_data.csv'
+    
     try:
-        # 支持 CSV 和 Excel
-        if file.name.endswith('.csv'):
-            df = pd.read_csv(file, header=1)
+        # 逻辑：如果有手动上传则用上传的，否则看目录下有没有默认文件
+        if uploaded_file is not None:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file, header=1)
+            else:
+                df = pd.read_excel(uploaded_file, header=1)
+        elif os.path.exists(default_filename):
+            df = pd.read_csv(default_filename, header=1)
         else:
-            df = pd.read_excel(file, header=1)
-        
-        # 统一列名映射（基于您提供的Excel结构）
+            return None
+
+        # 统一列名映射
         column_mapping = {
             'Unnamed: 0': 'Date',
             '美元指数': 'USD',
@@ -46,12 +45,11 @@ def process_data(file):
         df['Date'] = pd.to_datetime(df['Date'])
         df = df.sort_values('Date').reset_index(drop=True)
         
-        # 核心逻辑：以1个月（21个交易日）为维度计算变化率
+        # 计算1个月(21日)变化率
         window = 21
         df['USD_Ret'] = df['USD'].pct_change(periods=window)
         df['Gold_Ret'] = df['Gold'].pct_change(periods=window)
         
-        # 定义四种组合象限
         def get_regime(row):
             if pd.isna(row['USD_Ret']) or pd.isna(row['Gold_Ret']):
                 return "初始化中"
@@ -60,8 +58,6 @@ def process_data(file):
             return f"{u} & {g}"
 
         df['Regime'] = df.apply(get_regime, axis=1)
-        
-        # 识别连续的市场状态切片
         df['Regime_Grp'] = (df['Regime'] != df['Regime'].shift(1)).cumsum()
         return df
     except Exception as e:
@@ -71,110 +67,59 @@ def process_data(file):
 # --- 3. 侧边栏 ---
 st.sidebar.header("🛠️ 数据控制面板")
 
-# 文件上传器
-uploaded_file = st.sidebar.file_uploader("上传您的美国数据文件 (Excel/CSV)", type=['csv', 'xlsx'])
+# 既可以自动读，也可以手动更新
+uploaded_file = st.sidebar.file_uploader("更新数据文件 (可选)", type=['csv', 'xlsx'])
+df = load_and_process_data(uploaded_file)
 
-if uploaded_file:
-    df = process_data(uploaded_file)
-else:
-    st.info("👋 请在侧边栏上传数据文件开始分析。")
+if df is None:
+    st.warning("⚠️ 未找到数据文件。请确保 GitHub 仓库中有名为 `macro_data.csv` 的文件，或在此处上传。")
     st.stop()
 
-# --- 4. 象限筛选逻辑 ---
+# --- 4. 筛选逻辑 ---
 st.sidebar.subheader("🔍 切片筛选")
 regime_list = ["美元涨 & 黄金涨", "美元涨 & 黄金跌", "美元跌 & 黄金涨", "美元跌 & 黄金跌"]
 selected_regime = st.sidebar.selectbox("选择目标象限", regime_list)
 
-# 提取该象限的所有历史切片
+# 提取切片
 regime_df = df[df['Regime'] == selected_regime]
-slice_summary = regime_df.groupby('Regime_Grp').agg({
-    'Date': ['min', 'max', 'count']
-}).reset_index()
+slice_summary = regime_df.groupby('Regime_Grp').agg({'Date': ['min', 'max', 'count']}).reset_index()
 slice_summary.columns = ['ID', 'Start', 'End', 'Days']
-# 过滤掉极短的波动（小于3天），按时间倒序排列
 slice_summary = slice_summary[slice_summary['Days'] >= 3].sort_values('Start', ascending=False)
 
-slice_options = slice_summary.apply(
-    lambda x: f"{x['Start'].date()} 至 {x['End'].date()} ({x['Days']}天)", axis=1
-).tolist()
+if slice_summary.empty:
+    st.error(f"在历史数据中未找到符合 '{selected_regime}' 的切片。")
+    st.stop()
 
+slice_options = slice_summary.apply(lambda x: f"{x['Start'].date()} 至 {x['End'].date()} ({x['Days']}天)", axis=1).tolist()
 selected_slice_str = st.sidebar.selectbox("选择具体历史切片", slice_options)
 
-# 定位具体切片数据
 slice_idx = slice_options.index(selected_slice_str)
 target_id = slice_summary.iloc[slice_idx]['ID']
 current_slice_data = df[df['Regime_Grp'] == target_id].copy()
 
-# --- 5. 展示设置 ---
-st.sidebar.subheader("📊 图表设置")
-all_indicators = ['USD', 'Gold', 'SP500', 'UST_10Y', 'Oil', 'Copper', 'Fed_Funds', 'CPI_YoY', 'Unemployment']
-show_indicators = st.sidebar.multiselect("选择展示指标", all_indicators, default=['USD', 'Gold', 'UST_10Y', 'Oil'])
+# --- 5. 图表展示 ---
+show_indicators = st.sidebar.multiselect("选择展示指标", 
+                                        ['USD', 'Gold', 'SP500', 'UST_10Y', 'Oil', 'Copper', 'Fed_Funds', 'CPI_YoY', 'Unemployment'], 
+                                        default=['USD', 'Gold', 'Oil'])
 use_norm = st.sidebar.checkbox("归一化显示 (起点=100)", value=True)
 
-# --- 6. 主界面展示 ---
-st.title(f"市场状态：{selected_regime}")
-st.caption(f"当前分析切片周期: {selected_slice_str}")
+st.title(f"市场象限: {selected_regime}")
+st.caption(f"当前时间切片: {selected_slice_str}")
 
-# 指标概览卡片
-cols = st.columns(len(show_indicators))
-for i, ind in enumerate(show_indicators):
-    start_val = current_slice_data[ind].iloc[0]
-    end_val = current_slice_data[ind].iloc[-1]
-    change = (end_val - start_val) / start_val * 100
-    cols[i].metric(ind, f"{end_val:.2f}", f"{change:.2f}%")
-
-# Plotly 交互图表
 fig = go.Figure()
 for ind in show_indicators:
     y_data = current_slice_data[ind]
     if use_norm:
         y_data = (y_data / y_data.iloc[0]) * 100
-    
-    fig.add_trace(go.Scatter(
-        x=current_slice_data['Date'],
-        y=y_data,
-        name=ind,
-        mode='lines+markers' if len(current_slice_data) < 20 else 'lines',
-        hovertemplate='日期: %{x}<br>数值: %{y:.2f}'
-    ))
+    fig.add_trace(go.Scatter(x=current_slice_data['Date'], y=y_data, name=ind, mode='lines'))
 
-fig.update_layout(
-    height=600,
-    hovermode="x unified",
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    margin=dict(l=20, r=20, t=80, b=20),
-    xaxis=dict(gridcolor='lightgrey'),
-    yaxis=dict(gridcolor='lightgrey', title="归一化数值" if use_norm else "原始数值")
-)
+fig.update_layout(hovermode="x unified", height=600)
 st.plotly_chart(fig, use_container_width=True)
 
-# --- 7. 数据摘要表格 ---
-with st.expander("查看该切片完整数据摘要"):
-    summary_data = []
-    for ind in all_indicators:
-        s = current_slice_data[ind].iloc[0]
-        e = current_slice_data[ind].iloc[-1]
-        summary_data.append({
-            "指标": ind,
-            "起点值": s,
-            "终点值": e,
-            "区间涨跌幅": f"{((e-s)/s*100):.2f}%",
-            "均值": round(current_slice_data[ind].mean(), 2)
-        })
-    st.table(pd.DataFrame(summary_data))
-
-# --- 8. 凌晨1点决策参考 (最新状态提醒) ---
-st.divider()
-latest_date = df['Date'].max().date()
-latest_regime = df['Regime'].iloc[-1]
-st.info(f"📅 **数据最后更新日期**: {latest_date} | **当前最新市场状态**: {latest_regime}")
-if latest_regime == selected_regime:
-    st.success("🎯 **提示**: 当前市场正处于您选中的象限内，可参考上述历史切片的资产联动规律。")
-
-# 下载功能
-st.download_button(
-    "导出当前切片数据",
-    current_slice_data.to_csv(index=False).encode('utf-8-sig'),
-    f"{selected_regime}_{selected_slice_str}.csv",
-    "text/csv"
-)
+# --- 6. 统计摘要 ---
+st.subheader("📊 区间涨跌统计")
+summary_list = []
+for ind in show_indicators:
+    s, e = current_slice_data[ind].iloc[0], current_slice_data[ind].iloc[-1]
+    summary_list.append({"指标": ind, "涨跌幅": f"{((e-s)/s*100):.2f}%", "均值": round(current_slice_data[ind].mean(), 2)})
+st.table(pd.DataFrame(summary_list))
